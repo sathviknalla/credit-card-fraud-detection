@@ -1,0 +1,19 @@
+{
+  "optimal_threshold": 0.0597,
+  "pr_auc": 0.8095238095238095,
+  "roc_auc": 0.9991093297706524,
+  "baseline_cost": 121.0,
+  "optimal_cost": 26.5,
+  "cost_reduction_pct": 78.099173553719,
+  "review_rate": 0.005333333333333333,
+  "precision_at_optimal": 0.375,
+  "recall_at_optimal": 1.0,
+  "max_review_rate_cap": 0.015,
+  "cost_matrix": {
+    "cost_false_negative": 120.0,
+    "cost_false_positive": 5.0,
+    "cost_true_positive": 0.5,
+    "cost_true_negative": 0.0,
+    "max_review_rate": 0.015
+  }
+}
