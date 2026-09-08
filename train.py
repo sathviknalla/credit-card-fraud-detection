@@ -28,6 +28,7 @@ from data_preprocessing import (
 )
 from explainability import FraudExplainer
 from model_pipeline import BaseFraudEstimator, ModelFactory
+import ensemble_pipeline  # Registers the ensemble with ModelFactory
 from online_learning import OnlineFraudLearner
 
 logger = logging.getLogger("TrainPipeline")
@@ -142,7 +143,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default="xgboost",
-        choices=["xgboost", "random_forest", "logistic_regression"],
+        choices=["xgboost", "random_forest", "logistic_regression", "ensemble"],
         help="Core estimator type to train",
     )
     parser.add_argument(
@@ -152,6 +153,12 @@ if __name__ == "__main__":
         choices=["smote", "class_weight", "hybrid", "none"],
         help="Imbalance handling strategy",
     )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=None,
+        help="Number of synthetic samples to generate if dataset not found on disk",
+    )
     args = parser.parse_args()
 
-    run_training_pipeline(model_type=args.model, imbalance_strategy=args.imbalance)
+    run_training_pipeline(model_type=args.model, imbalance_strategy=args.imbalance, n_samples=args.samples)

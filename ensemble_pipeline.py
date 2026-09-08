@@ -92,10 +92,18 @@ class StackedFraudEnsemble:
         base_model_names: Optional[List[str]] = None,
         n_folds: int = 5,
         meta_learner_C: float = 0.01,
+        params: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ):
+        if params:
+            base_model_names = params.get("base_model_names", base_model_names)
+            n_folds = params.get("n_folds", n_folds)
+            meta_learner_C = params.get("meta_learner_C", meta_learner_C)
+
         self.base_model_names = base_model_names or ["xgboost", "random_forest", "logistic_regression"]
         self.n_folds = n_folds
         self.meta_learner_C = meta_learner_C
+        self.params = params or {}
 
         self.base_models: List[BaseFraudEstimator] = []
         self.meta_learner: Optional[LogisticRegression] = None
@@ -112,6 +120,8 @@ class StackedFraudEnsemble:
         y_train: pd.Series,
         X_val: Optional[pd.DataFrame] = None,
         y_val: Optional[pd.Series] = None,
+        scale_pos_weight: Optional[float] = None,
+        **kwargs,
     ) -> "StackedFraudEnsemble":
         """Trains the ensemble using OOF stacking strategy.
 
@@ -270,3 +280,6 @@ class StackedFraudEnsemble:
         if not isinstance(obj, StackedFraudEnsemble):
             raise TypeError(f"Loaded object is not a StackedFraudEnsemble: {type(obj)}")
         return obj
+
+# Automatically register the ensemble with the ModelFactory
+ModelFactory._REGISTRY["ensemble"] = StackedFraudEnsemble
