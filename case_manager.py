@@ -121,6 +121,18 @@ class FraudCase:
         else:
             return CasePriority.LOW
 
+    @property
+    def amount(self) -> float:
+        return self.transaction_amount
+
+    @property
+    def top_reasons(self) -> List[Any]:
+        return self.top_risk_factors
+
+    @property
+    def feature_snapshot(self) -> Dict[str, Any]:
+        return self.metadata.get("feature_snapshot", {})
+
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the case to a plain dictionary for JSON responses."""
         return {
@@ -151,29 +163,24 @@ _VALID_TRANSITIONS: Dict[CaseStatus, List[CaseStatus]] = {
         CaseStatus.CLEARED,
         CaseStatus.ESCALATED,
     ],
+    CaseStatus.ESCALATED: [CaseStatus.CONFIRMED_FRAUD, CaseStatus.CLEARED],
     CaseStatus.CONFIRMED_FRAUD: [],  # Terminal state
     CaseStatus.CLEARED: [],          # Terminal state
-    CaseStatus.ESCALATED: [CaseStatus.CONFIRMED_FRAUD, CaseStatus.CLEARED],
 }
 
 
 # ---------------------------------------------------------------------------
-# Case Manager
+# Fraud Case Manager Service
 # ---------------------------------------------------------------------------
 
 class FraudCaseManager:
-    """Thread-safe fraud case management system.
+    """Thread-safe state machine and registry for fraud cases.
 
-    Maintains an in-memory registry of all fraud investigation cases with
-    full audit logging, state transition validation, and prioritized analyst
-    queue generation.
-
-    Args:
-        max_cases: Maximum number of cases to retain in memory before
-            auto-archiving the oldest resolved cases. Default: 10,000.
+    Enforces business validation rules for case progression, analyst queues,
+    priority triage, and audit compliance logging.
     """
 
-    _PRIORITY_ORDER = {
+    _PRIORITY_ORDER: Dict[CasePriority, int] = {
         CasePriority.CRITICAL: 0,
         CasePriority.HIGH: 1,
         CasePriority.MEDIUM: 2,
@@ -188,11 +195,15 @@ class FraudCaseManager:
     def open_case(
         self,
         transaction_id: str,
-        fraud_probability: float,
-        expected_loss: float,
-        transaction_amount: float,
-        top_risk_factors: Optional[List[Dict[str, Any]]] = None,
+        fraud_probability: float = 0.0,
+        expected_loss: Optional[float] = None,
+        transaction_amount: Optional[float] = None,
+        amount: Optional[float] = None,
+        top_risk_factors: Optional[List[Any]] = None,
+        top_reasons: Optional[List[Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        feature_snapshot: Optional[Dict[str, Any]] = None,
+        notes: str = "",
     ) -> FraudCase:
         """Creates a new investigation case for a flagged transaction.
 
@@ -201,52 +212,59 @@ class FraudCaseManager:
             fraud_probability: ML model's fraud probability score.
             expected_loss: Estimated financial loss (P(Fraud) * transaction value).
             transaction_amount: Original transaction amount.
+            amount: Alias for transaction_amount.
             top_risk_factors: Top SHAP features from model explanation.
+            top_reasons: Alias for top_risk_factors.
             metadata: Additional context (merchant, IP, device, etc.)
+            feature_snapshot: Dictionary of raw transaction features.
+            notes: Initial investigation notes.
 
         Returns:
             Newly created FraudCase object.
         """
+        amt = amount if amount is not None else (transaction_amount if transaction_amount is not None else 0.0)
+        exp_loss = expected_loss if expected_loss is not None else (fraud_probability * amt if amt > 0 else fraud_probability * 120.0)
+        reasons = top_risk_factors if top_risk_factors is not None else (top_reasons or [])
+        meta = metadata.copy() if metadata else {}
+        if feature_snapshot:
+            meta["feature_snapshot"] = feature_snapshot
+
         case = FraudCase(
             transaction_id=transaction_id,
             fraud_probability=fraud_probability,
-            expected_loss=expected_loss,
-            transaction_amount=transaction_amount,
-            top_risk_factors=top_risk_factors or [],
-            metadata=metadata or {},
+            expected_loss=exp_loss,
+            transaction_amount=amt,
+            top_risk_factors=reasons,
+            metadata=meta,
         )
+        if notes and case.audit_trail:
+            case.audit_trail[0].notes += f" | {notes}"
+
         with self._lock:
             self._cases[case.case_id] = case
             self._maybe_evict_old_cases()
 
         logger.info(
             f"Case opened: {case.case_id} | Priority: {case.priority.value} | "
-            f"P(Fraud): {fraud_probability:.4f} | Expected Loss: ${expected_loss:.2f}"
+            f"P(Fraud): {fraud_probability:.4f} | Expected Loss: ${exp_loss:.2f}"
         )
         return case
 
     def transition_status(
         self,
         case_id: str,
-        new_status: CaseStatus,
+        new_status: Optional[Union[CaseStatus, str]] = None,
+        to_status: Optional[Union[CaseStatus, str]] = None,
         analyst_id: Optional[str] = None,
         notes: str = "",
     ) -> FraudCase:
-        """Performs a validated status transition with audit logging.
+        """Performs a validated status transition with audit logging."""
+        target_status = new_status if new_status is not None else to_status
+        if target_status is None:
+            raise ValueError("new_status or to_status must be provided.")
+        if isinstance(target_status, str):
+            target_status = CaseStatus(target_status)
 
-        Args:
-            case_id: The ID of the case to update.
-            new_status: The target CaseStatus to transition to.
-            analyst_id: ID of the analyst performing the action.
-            notes: Free-text notes explaining the decision.
-
-        Returns:
-            Updated FraudCase object.
-
-        Raises:
-            KeyError: If case_id does not exist.
-            ValueError: If the requested transition is not allowed.
-        """
         with self._lock:
             if case_id not in self._cases:
                 raise KeyError(f"Case '{case_id}' not found.")
@@ -255,14 +273,14 @@ class FraudCaseManager:
             current_status = case.status
             allowed = _VALID_TRANSITIONS.get(current_status, [])
 
-            if new_status not in allowed:
+            if target_status not in allowed:
                 raise ValueError(
-                    f"Invalid transition: {current_status.value} → {new_status.value}. "
+                    f"Invalid transition: {current_status.value} → {target_status.value}. "
                     f"Allowed: {[s.value for s in allowed]}"
                 )
 
             old_status = case.status
-            case.status = new_status
+            case.status = target_status
             case.updated_at = datetime.now(timezone.utc).isoformat()
             if analyst_id:
                 case.assigned_analyst = analyst_id
@@ -272,14 +290,14 @@ class FraudCaseManager:
                 AuditEvent(
                     action="STATUS_TRANSITION",
                     from_status=old_status.value,
-                    to_status=new_status.value,
+                    to_status=target_status.value,
                     analyst_id=analyst_id,
                     notes=notes,
                 )
             )
 
             logger.info(
-                f"Case {case_id}: {old_status.value} → {new_status.value} "
+                f"Case {case_id}: {old_status.value} → {target_status.value} "
                 f"(Analyst: {analyst_id or 'system'})"
             )
             return case
@@ -297,9 +315,11 @@ class FraudCaseManager:
 
     def get_analyst_queue(
         self,
-        status_filter: Optional[List[CaseStatus]] = None,
+        status_filter: Optional[Union[List[CaseStatus], CaseStatus]] = None,
+        status: Optional[Union[List[CaseStatus], CaseStatus]] = None,
+        min_priority: Optional[CasePriority] = None,
         analyst_id: Optional[str] = None,
-        max_results: int = 50,
+        max_results: int = 100,
     ) -> List[FraudCase]:
         """Returns a prioritized list of cases for analyst review.
 
@@ -307,28 +327,25 @@ class FraudCaseManager:
           1. Priority (CRITICAL first)
           2. Expected financial loss (highest first)
           3. Creation time (oldest first)
-
-        Args:
-            status_filter: Only return cases with these statuses.
-                Defaults to [FLAGGED, UNDER_REVIEW, ESCALATED].
-            analyst_id: Filter to only cases assigned to this analyst.
-            max_results: Maximum number of cases to return.
-
-        Returns:
-            Sorted list of FraudCase objects for analyst attention.
         """
-        if status_filter is None:
-            status_filter = [
+        raw_filter = status if status is not None else status_filter
+        if raw_filter is None:
+            active_statuses = [
                 CaseStatus.FLAGGED,
                 CaseStatus.UNDER_REVIEW,
                 CaseStatus.ESCALATED,
             ]
+        elif isinstance(raw_filter, (CaseStatus, str)):
+            active_statuses = [CaseStatus(raw_filter)]
+        else:
+            active_statuses = [CaseStatus(s) for s in raw_filter]
 
         with self._lock:
             candidates = [
                 c for c in self._cases.values()
-                if c.status in status_filter
+                if c.status in active_statuses
                 and (analyst_id is None or c.assigned_analyst == analyst_id)
+                and (min_priority is None or self._PRIORITY_ORDER[c.priority] <= self._PRIORITY_ORDER[min_priority])
             ]
 
         candidates.sort(

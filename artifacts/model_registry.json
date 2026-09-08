@@ -1,0 +1,19 @@
+{
+  "versions": [
+    {
+      "version_id": "v1.0.0-champion",
+      "model_type": "XGBoost",
+      "training_timestamp": "2026-09-08T19:25:46.734389+00:00",
+      "pr_auc_val": 1.0,
+      "pr_auc_test": 1.0,
+      "optimal_threshold": 0.602,
+      "imbalance_strategy": "hybrid",
+      "n_training_samples": 5000,
+      "trigger_reason": "BASELINE",
+      "artifact_path": "artifacts\\fraud_model.joblib",
+      "is_champion": true,
+      "feature_hash": "",
+      "extra_metrics": {}
+    }
+  ]
+}

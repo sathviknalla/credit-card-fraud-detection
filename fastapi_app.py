@@ -17,12 +17,14 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field, ConfigDict
 
+from case_manager import CASE_MANAGER, CaseStatus, CasePriority
 from config import CONFIG
 from data_preprocessing import LeakageSafePreprocessor, generate_synthetic_fraud_dataset
 from drift_monitoring import ConceptDriftMonitor, SystemDriftSummary
 from explainability import FeatureContribution, FraudExplainer
 from model_pipeline import BaseFraudEstimator
 from online_learning import OnlineFraudLearner
+from retraining_scheduler import ModelRegistry
 
 logger = logging.getLogger("FraudAPI")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -365,3 +367,94 @@ def get_drift_status() -> Dict[str, Any]:
     drift_summary = STATE.drift_monitor.evaluate_system_drift()
     from dataclasses import asdict
     return asdict(drift_summary)
+
+
+# ---------------------------------------------------------------------------
+# Case Management & Governance Endpoints (Phase 7)
+# ---------------------------------------------------------------------------
+
+class CaseTransitionPayload(BaseModel):
+    to_status: CaseStatus
+    analyst_id: str
+    notes: Optional[str] = ""
+
+
+@app.get("/cases", tags=["Case Management"])
+def list_cases(status_filter: Optional[CaseStatus] = None) -> List[Dict[str, Any]]:
+    """Returns analyst case queue sorted by risk priority and expected financial loss."""
+    cases = CASE_MANAGER.get_analyst_queue(status=status_filter)
+    return [c.to_dict() for c in cases]
+
+
+@app.get("/cases/stats", tags=["Case Management"])
+def get_case_statistics() -> Dict[str, Any]:
+    """Returns operational workload metrics and resolution statistics."""
+    return CASE_MANAGER.get_statistics()
+
+
+@app.get("/cases/{case_id}", tags=["Case Management"])
+def get_case_detail(case_id: str) -> Dict[str, Any]:
+    """Retrieves detailed record and current state for a specific case."""
+    try:
+        case = CASE_MANAGER.get_case(case_id)
+        return case.to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@app.post("/cases/{case_id}/transition", tags=["Case Management"])
+def transition_case_status(case_id: str, payload: CaseTransitionPayload) -> Dict[str, Any]:
+    """Transitions a case through the investigative workflow state machine."""
+    try:
+        updated = CASE_MANAGER.transition_status(
+            case_id=case_id,
+            to_status=payload.to_status,
+            analyst_id=payload.analyst_id,
+            notes=payload.notes or "",
+        )
+        return {"status": "SUCCESS", "case": updated.to_dict()}
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@app.get("/cases/{case_id}/audit", tags=["Case Management"])
+def get_case_audit_trail(case_id: str) -> List[Dict[str, Any]]:
+    """Retrieves immutable PCI-DSS compliance audit trail for a case."""
+    try:
+        return CASE_MANAGER.get_full_audit_trail(case_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Model Registry & MLOps Governance Endpoints (Phase 8)
+# ---------------------------------------------------------------------------
+
+@app.get("/registry/models", tags=["Model Governance"])
+def list_model_versions() -> List[Dict[str, Any]]:
+    """Lists all registered model versions, metrics, and active champion status."""
+    registry = ModelRegistry()
+    return registry.list_versions()
+
+
+@app.get("/registry/champion", tags=["Model Governance"])
+def get_active_champion() -> Dict[str, Any]:
+    """Returns metadata for the currently active production champion model."""
+    registry = ModelRegistry()
+    champ = registry.get_champion()
+    if not champ:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active champion model found.")
+    return champ.to_dict()
+
+
+@app.post("/registry/promote/{version_id}", tags=["Model Governance"])
+def promote_champion_model(version_id: str) -> Dict[str, Any]:
+    """Hot-swaps production scoring to a new champion model version."""
+    registry = ModelRegistry()
+    try:
+        promoted = registry.set_champion(version_id)
+        return {"status": "SUCCESS", "promoted_champion": promoted.to_dict()}
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))

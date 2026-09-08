@@ -108,6 +108,7 @@ class FraudExplainer:
 
         shap_values_raw = self.explainer(X_single)
         
+        base_val = 0.0
         # Handle different SHAP output formats (binary classification multi-output vs single output)
         if hasattr(shap_values_raw, "values"):
             vals = shap_values_raw.values
@@ -115,15 +116,22 @@ class FraudExplainer:
                 shap_vec = vals[0, :, 1]
             elif vals.ndim == 2:  # (1, n_features)
                 shap_vec = vals[0, :]
-            if hasattr(shap_values_raw.base_values, "ndim") and shap_values_raw.base_values.ndim > 1:
-                base_val = float(shap_values_raw.base_values[0, 1])
-            elif hasattr(shap_values_raw.base_values, "__len__"):
-                base_val = float(shap_values_raw.base_values[0])
             else:
-                base_val = float(shap_values_raw.base_values)
+                shap_vec = vals.flatten()
+
+            if hasattr(shap_values_raw, "base_values"):
+                bv = shap_values_raw.base_values
+                try:
+                    if hasattr(bv, "ndim") and bv.ndim > 1:
+                        base_val = float(bv[0, 1]) if bv.shape[-1] > 1 else float(bv[0, 0])
+                    elif hasattr(bv, "__len__"):
+                        base_val = float(bv[0])
+                    else:
+                        base_val = float(bv)
+                except Exception:
+                    base_val = 0.0
         else:
             shap_vec = np.asarray(shap_values_raw).flatten()
-            base_val = 0.0
 
         feature_names = list(X_single.columns)
         all_shap_dict = {f: float(v) for f, v in zip(feature_names, shap_vec)}

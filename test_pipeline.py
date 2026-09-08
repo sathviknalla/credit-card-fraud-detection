@@ -217,6 +217,45 @@ def test_fastapi_endpoints():
         assert "overall_system_status" in drift_data
         assert drift_data["overall_system_status"] in ["HEALTHY", "WARNING", "ACTION_REQUIRED"]
 
+        # 7. Case Management endpoints
+        from case_manager import CASE_MANAGER
+        test_case = CASE_MANAGER.open_case(
+            transaction_id="tx-api-test-01",
+            amount=500.0,
+            fraud_probability=0.95,
+            notes="API integration test case",
+        )
+        res_cases = client.get("/cases")
+        assert res_cases.status_code == 200
+        assert isinstance(res_cases.json(), list)
+
+        res_case_stats = client.get("/cases/stats")
+        assert res_case_stats.status_code == 200
+        assert "total_cases" in res_case_stats.json()
+
+        res_case_detail = client.get(f"/cases/{test_case.case_id}")
+        assert res_case_detail.status_code == 200
+        assert res_case_detail.json()["case_id"] == test_case.case_id
+
+        res_trans = client.post(
+            f"/cases/{test_case.case_id}/transition",
+            json={"to_status": "UNDER_REVIEW", "analyst_id": "test_analyst", "notes": "Moving to review"},
+        )
+        assert res_trans.status_code == 200
+        assert res_trans.json()["case"]["status"] == "UNDER_REVIEW"
+
+        res_audit = client.get(f"/cases/{test_case.case_id}/audit")
+        assert res_audit.status_code == 200
+        assert len(res_audit.json()) >= 2
+
+        # 8. Model Registry endpoints
+        res_reg = client.get("/registry/models")
+        assert res_reg.status_code == 200
+        assert isinstance(res_reg.json(), list)
+
+        res_champ = client.get("/registry/champion")
+        assert res_champ.status_code in [200, 404]
+
 
 def test_behavioral_velocity_engine():
     """Validates real-time and batch behavioral velocity feature extraction."""
