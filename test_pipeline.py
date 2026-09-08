@@ -209,3 +209,56 @@ def test_fastapi_endpoints():
         assert res_metrics.status_code == 200
         metrics_data = res_metrics.json()
         assert "online_learning_telemetry" in metrics_data
+
+        # 6. Drift endpoint
+        res_drift = client.get("/drift")
+        assert res_drift.status_code == 200
+        drift_data = res_drift.json()
+        assert "overall_system_status" in drift_data
+        assert drift_data["overall_system_status"] in ["HEALTHY", "WARNING", "ACTION_REQUIRED"]
+
+
+def test_behavioral_velocity_engine():
+    """Validates real-time and batch behavioral velocity feature extraction."""
+    from feature_store import BehavioralVelocityEngine
+
+    engine = BehavioralVelocityEngine()
+
+    # First transaction
+    f1 = engine.compute_single_features(time_sec=1000.0, amount=50.0, entity_id="card_123")
+    assert f1["tx_velocity_1h"] == 0
+    assert f1["amount_to_avg_ratio"] == 1.0
+
+    # Second rapid transaction within 10 minutes
+    f2 = engine.compute_single_features(time_sec=1600.0, amount=200.0, entity_id="card_123")
+    assert f2["tx_velocity_1h"] == 1
+    assert f2["time_delta_seconds"] == 600.0
+    assert f2["amount_to_avg_ratio"] > 1.0
+
+
+def test_concept_drift_monitor(sample_dataset):
+    """Validates PSI and KS-test drift detection against distribution shifts."""
+    from drift_monitoring import ConceptDriftMonitor
+
+    features_df = sample_dataset.drop(columns=["Class"])
+    monitor = ConceptDriftMonitor(reference_data=features_df, buffer_size=100)
+
+    # Ingest baseline-like transactions
+    for _, row in features_df.iloc[:50].iterrows():
+        monitor.ingest_streaming_transaction(row.to_dict())
+
+    summary_healthy = monitor.evaluate_system_drift()
+    assert summary_healthy.overall_system_status in ["HEALTHY", "WARNING"]
+
+    # Ingest heavily shifted / drifted transactions
+    drifted_df = features_df.iloc[:50].copy()
+    drifted_df["V14"] += 15.0  # Massive shift in key fraud indicator
+
+    monitor_drift = ConceptDriftMonitor(reference_data=features_df, buffer_size=100)
+    for _, row in drifted_df.iterrows():
+        monitor_drift.ingest_streaming_transaction(row.to_dict())
+
+    summary_drifted = monitor_drift.evaluate_system_drift()
+    v14_report = next((r for r in summary_drifted.feature_reports if r.feature_name == "V14"), None)
+    assert v14_report is not None
+    assert v14_report.psi_score > 0.10, "Significant shift should increase PSI score."

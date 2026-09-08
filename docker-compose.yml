@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  fraud-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fraud-scoring-api
+    command: uvicorn fastapi_app:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  analyst-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fraud-analyst-dashboard
+    command: streamlit run dashboard.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    depends_on:
+      fraud-api:
+        condition: service_healthy
+    restart: unless-stopped

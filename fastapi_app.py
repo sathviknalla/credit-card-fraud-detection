@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from config import CONFIG
 from data_preprocessing import LeakageSafePreprocessor, generate_synthetic_fraud_dataset
+from drift_monitoring import ConceptDriftMonitor, SystemDriftSummary
 from explainability import FeatureContribution, FraudExplainer
 from model_pipeline import BaseFraudEstimator
 from online_learning import OnlineFraudLearner
@@ -122,6 +123,7 @@ class ServiceState:
     preprocessor: Optional[LeakageSafePreprocessor] = None
     explainer: Optional[FraudExplainer] = None
     online_learner: Optional[OnlineFraudLearner] = None
+    drift_monitor: Optional[ConceptDriftMonitor] = None
     threshold_metadata: Dict[str, Any] = {}
     optimal_threshold: float = 0.50
 
@@ -154,13 +156,13 @@ def load_or_bootstrap_artifacts() -> None:
     else:
         STATE.online_learner = OnlineFraudLearner()
 
-    # Initialize SHAP explainer
-    logger.info("Initializing SHAP Explainer...")
-    # Generate small background dataset for explainer baseline
-    sample_df = generate_synthetic_fraud_dataset(n_samples=200, random_state=42)
+    # Initialize SHAP explainer & Drift Monitor
+    logger.info("Initializing SHAP Explainer and Concept Drift Monitor...")
+    sample_df = generate_synthetic_fraud_dataset(n_samples=500, random_state=42)
     sample_features = sample_df.drop(columns=["Class"])
     bg_transformed = STATE.preprocessor.transform(sample_features)
     STATE.explainer = FraudExplainer(model_wrapper=STATE.model, background_data=bg_transformed)
+    STATE.drift_monitor = ConceptDriftMonitor(reference_data=bg_transformed, buffer_size=500)
     logger.info(f"Microservice initialized. Decision Threshold: {STATE.optimal_threshold:.4f}")
 
 
@@ -248,6 +250,10 @@ def predict_transaction(payload: TransactionPayload) -> PredictionResponse:
 
     # Expected financial loss = P(Fraud) * Cost_FN + (1-P(Fraud)) * Cost_TN
     expected_loss = fraud_prob * CONFIG.cost.cost_false_negative
+
+    # Ingest into drift monitoring buffer
+    if STATE.drift_monitor is not None:
+        STATE.drift_monitor.ingest_streaming_transaction(df_trans.iloc[0].to_dict())
 
     # 4. Generate SHAP top feature attributions & reason codes
     explanation = STATE.explainer.explain_transaction(df_trans, top_k=5)
@@ -346,3 +352,16 @@ def get_metrics() -> Dict[str, Any]:
             "running_average_loss": STATE.online_learner.stats.running_loss if STATE.online_learner else 0.0,
         },
     }
+
+
+@app.get("/drift", tags=["Monitoring"])
+def get_drift_status() -> Dict[str, Any]:
+    """Returns real-time feature distribution shift analysis (PSI & KS-tests)."""
+    if STATE.drift_monitor is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Drift monitor is not initialized.",
+        )
+    drift_summary = STATE.drift_monitor.evaluate_system_drift()
+    from dataclasses import asdict
+    return asdict(drift_summary)

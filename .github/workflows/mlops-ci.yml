@@ -1,0 +1,39 @@
+name: Fraud Detection MLOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-validate:
+    name: Lint, Test & Model Verification
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Pytest Test Suite
+      run: |
+        python -m pytest test_pipeline.py -v --durations=10
+
+    - name: Verify Training Pipeline Artifact Generation
+      run: |
+        python train.py --model xgboost --imbalance hybrid
+        test -f artifacts/fraud_model.joblib
+        test -f artifacts/preprocessor.joblib
+        test -f artifacts/threshold_metadata.json
+        test -f artifacts/online_fraud_model.joblib
