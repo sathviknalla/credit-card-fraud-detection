@@ -139,7 +139,12 @@ class CostAwareThresholdOptimizer:
         y_true_arr = np.asarray(y_val_true).astype(int)
         y_prob_arr = np.asarray(y_val_probas)
 
-        candidate_thresholds = np.linspace(0.005, 0.995, threshold_steps)
+        # Combine uniform grid with exact precision-recall inflection points
+        _, _, pr_thresholds = precision_recall_curve(y_true_arr, y_prob_arr)
+        grid_thresholds = np.linspace(0.005, 0.995, threshold_steps)
+        candidate_thresholds = np.unique(np.clip(np.concatenate([grid_thresholds, pr_thresholds]), 0.001, 0.999))
+        candidate_thresholds = np.sort(candidate_thresholds)
+
         evaluations: List[ThresholdEvaluationResult] = []
 
         for thresh in candidate_thresholds:

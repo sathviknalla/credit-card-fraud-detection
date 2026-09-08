@@ -115,9 +115,12 @@ class FraudExplainer:
                 shap_vec = vals[0, :, 1]
             elif vals.ndim == 2:  # (1, n_features)
                 shap_vec = vals[0, :]
+            if hasattr(shap_values_raw.base_values, "ndim") and shap_values_raw.base_values.ndim > 1:
+                base_val = float(shap_values_raw.base_values[0, 1])
+            elif hasattr(shap_values_raw.base_values, "__len__"):
+                base_val = float(shap_values_raw.base_values[0])
             else:
-                shap_vec = vals.flatten()
-            base_val = float(shap_values_raw.base_values[0, 1] if shap_values_raw.base_values.ndim > 1 else shap_values_raw.base_values[0])
+                base_val = float(shap_values_raw.base_values)
         else:
             shap_vec = np.asarray(shap_values_raw).flatten()
             base_val = 0.0

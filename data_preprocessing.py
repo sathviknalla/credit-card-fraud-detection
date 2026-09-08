@@ -215,9 +215,10 @@ class ImbalanceHandler:
             return X_train, y_train, scale_pos_weight
 
         if strategy == "smote":
+            actual_k = min(self.config.smote_k_neighbors, max(1, pos_count - 1))
             smote = SMOTE(
                 sampling_strategy=self.config.smote_sampling_strategy,
-                k_neighbors=self.config.smote_k_neighbors,
+                k_neighbors=actual_k,
                 random_state=CONFIG.data.random_state,
             )
             X_res, y_res = smote.fit_resample(X_train, y_train)
@@ -228,9 +229,10 @@ class ImbalanceHandler:
 
         if strategy == "hybrid":
             # SMOTE to boost minority class, followed by gentle RandomUnderSampler
+            actual_k = min(self.config.smote_k_neighbors, max(1, pos_count - 1))
             smote = SMOTE(
                 sampling_strategy=self.config.smote_sampling_strategy,
-                k_neighbors=self.config.smote_k_neighbors,
+                k_neighbors=actual_k,
                 random_state=CONFIG.data.random_state,
             )
             X_sm, y_sm = smote.fit_resample(X_train, y_train)

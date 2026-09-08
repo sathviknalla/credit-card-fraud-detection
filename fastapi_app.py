@@ -15,7 +15,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from config import CONFIG
 from data_preprocessing import LeakageSafePreprocessor, generate_synthetic_fraud_dataset
@@ -33,6 +33,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 
 class TransactionPayload(BaseModel):
     """Input payload representing a single credit card transaction event."""
+
+    model_config = ConfigDict(extra="ignore")
 
     transaction_id: Optional[str] = Field(
         default_factory=lambda: str(uuid.uuid4()),
