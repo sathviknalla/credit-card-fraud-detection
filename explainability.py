@@ -70,8 +70,19 @@ class FraudExplainer:
     def _initialize_explainer(self) -> None:
         """Instantiates appropriate SHAP explainer based on model architecture."""
         estimator = self.model_wrapper.estimator
+        
+        # If ensemble, use the primary tree base model for fast, robust TreeExplainer attribution
+        if hasattr(self.model_wrapper, "base_models") and self.model_wrapper.base_models:
+            for bm in self.model_wrapper.base_models:
+                if isinstance(bm, (XGBoostFraudModel, RandomForestFraudModel)) and bm.estimator is not None:
+                    try:
+                        self.explainer = shap.TreeExplainer(bm.estimator)
+                        logger.info(f"Initialized TreeExplainer for ensemble using base model: {bm.model_name}")
+                        return
+                    except Exception as e:
+                        logger.warning(f"TreeExplainer for base model {bm.model_name} failed: {e}")
 
-        if isinstance(self.model_wrapper, (XGBoostFraudModel, RandomForestFraudModel)):
+        if isinstance(self.model_wrapper, (XGBoostFraudModel, RandomForestFraudModel)) and estimator is not None:
             try:
                 # TreeExplainer is fastest and exact for tree ensembles
                 self.explainer = shap.TreeExplainer(estimator)
@@ -83,7 +94,10 @@ class FraudExplainer:
         else:
             # Linear / general explainer fallback
             bg = self.background_data.sample(min(100, len(self.background_data))) if self.background_data is not None else None
-            self.explainer = shap.Explainer(estimator.predict_proba if hasattr(estimator, "predict_proba") else estimator, bg)
+            pred_func = getattr(self.model_wrapper, "predict_proba", None)
+            if pred_func is None and estimator is not None:
+                pred_func = getattr(estimator, "predict_proba", estimator)
+            self.explainer = shap.Explainer(pred_func, bg)
             logger.info("Initialized generic SHAP Explainer.")
 
     def explain_transaction(

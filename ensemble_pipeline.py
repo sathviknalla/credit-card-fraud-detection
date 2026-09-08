@@ -73,11 +73,11 @@ class EnsembleReport:
         return "\n".join(lines)
 
 
-class StackedFraudEnsemble:
+class StackedFraudEnsemble(BaseFraudEstimator):
     """Level-2 Stacking Ensemble for fraud detection.
 
     Trains multiple diverse base estimators on K-fold cross-validation
-    to generate unbiased out-of-fold (OOF) probability predictions,
+    to generate unbiased out-of-fold (OOF) predictions,
     then trains a meta-learner to optimally blend them.
 
     Args:
@@ -95,6 +95,7 @@ class StackedFraudEnsemble:
         params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
+        super().__init__(model_name="StackedEnsemble", params=params)
         if params:
             base_model_names = params.get("base_model_names", base_model_names)
             n_folds = params.get("n_folds", n_folds)
@@ -103,16 +104,26 @@ class StackedFraudEnsemble:
         self.base_model_names = base_model_names or ["xgboost", "random_forest", "logistic_regression"]
         self.n_folds = n_folds
         self.meta_learner_C = meta_learner_C
-        self.params = params or {}
 
         self.base_models: List[BaseFraudEstimator] = []
         self.meta_learner: Optional[LogisticRegression] = None
         self.is_fitted: bool = False
         self.feature_names_: Optional[List[str]] = None
-        self.model_name: str = "StackedEnsemble"
 
         # Filled after fit
         self._last_report: Optional[EnsembleReport] = None
+
+    def build_estimator(self) -> Any:
+        return self.meta_learner
+
+    def _fit_internal(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series] = None,
+    ) -> None:
+        pass
 
     def fit(
         self,
